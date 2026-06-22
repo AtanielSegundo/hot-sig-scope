@@ -2,6 +2,7 @@ import numpy as np
 import raylib as rl
 from scipy.signal import bilinear
 import core.draw  as draw
+import core.audio as audio
 
 import core.scope   as scope
 
@@ -288,26 +289,30 @@ def render_bench_tranfer_function(cfg, state,):
     rl.ClearBackground((10, 10, 14))
     
     laplace_tfs = {
-        "pass"     : ([1], [0.5,1]),
+        "pass"     : ([1], [1]),
         "chebI_hp" : ([1,0,0], [1.0, 4726, 1.666e7]),
-        "chebI_bp" : ([7.3e7,0,0], np.polymul([1.0, 3341.9, 8.332e6],[1.0, 10134.9, 7.662e7])),
+        "chebI_bp" : ([7.3e7,0,0], 
+                      np.polymul([1.0, 3341.9, 8.332e6],[1.0, 10134.9, 7.662e7])),
     }
 
     num, den = laplace_tfs["chebI_bp"]
     
     # num = den = None
     show_splane  = False
-    show_fft     = True
+    show_fft     = False
     f_min        = 1.0
-    f_max        = 8000.0
-    sweep_period = 10.0
+    f_max        = 4000
+    sweep_period = 5.0
     # Convert from s plane to z using bilinear projection => 
     
     # 2/T * (1 - z^-1) / (1 + z^-1)
-    z_T          = 1/16_000
+    z_T          = None
     
     # Number of bits to use in quantization
-    quantization_bits = 8
+    quantization_bits = 4
+
+    # Send the displayed test tone (filter output at f_now) to the speaker.
+    show_as_audio = False
 
     if num is None or den is None:
         wc  = 2 * np.pi * 1000.0
@@ -359,6 +364,20 @@ def render_bench_tranfer_function(cfg, state,):
     # current readouts (phase interpolated from the unwrapped curve to match it)
     mag_now   = 20 * np.log10(np.abs(H_now) + 1e-12)
     phase_now = np.interp(f_now, freqs, phase)
+
+    # play the displayed tone: sine at f_now scaled by the filter response
+    # |H(f_now)|, with the same bit depth as the panel. Loud in passband, quiet
+    # in stopband -- you literally hear the frequency response as it sweeps.
+    if show_as_audio:
+        snd = state.get("audio")
+        if snd is None:
+            snd = audio.ToneStreamer(sample_rate=44100, frames=2048)
+            state["audio"] = snd
+        snd.feed(f_now, amp=min(float(np.abs(H_now)), 1.0), bits=quantization_bits)
+    else:
+        snd = state.get("audio")
+        if snd is not None:
+            snd.stop()
 
     DECAY = 0.0                          
     M     = 2048
