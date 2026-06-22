@@ -1,0 +1,35 @@
+[build-system]
+requires      = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name            = "scope"
+version         = "0.1.0"
+description     = "Hot-reloading raylib oscilloscope / control-systems visualizer (S/Z transfer-function bench, pole-zero maps, quantization)."
+requires-python = ">=3.12"
+license         = { text = "MIT" }
+authors         = [{ name = "AtanielSegundo", email = "10ataniel@gmail.com" }]
+keywords        = ["oscilloscope", "raylib", "dsp", "control-systems", "laplace", "z-transform", "bode"]
+
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "raylib>=6.0.1",   # raylib-python-cffi (imports as `raylib`)
+    "watchdog>=4.0",   # file-watch hot reload
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+]
+
+[project.scripts]
+scope = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+packages   = ["core"]
+
+[tool.ruff]
+line-length    = 100
+target-version = "py312"

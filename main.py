@@ -13,7 +13,7 @@ def when_configs_reloaded() -> None:
     rl.SetWindowTitle(configs.ScreenCfg.window_title)
     configs.ScreenCfg.consume_fresh()
 
-if __name__ == "__main__" :    
+def main() -> None:
     hot_reloader = HotReloader(
         modules_root = "./core",
         targets = {
@@ -50,3 +50,7 @@ if __name__ == "__main__" :
             time.sleep(2)
 
         rl.EndDrawing()
+
+
+if __name__ == "__main__":
+    main()
