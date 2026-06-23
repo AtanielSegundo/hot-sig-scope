@@ -3,10 +3,11 @@ import traceback
 import raylib as rl
 from core.hot_reload import HotReloader
 
-import core.render  as render
-import core.configs as configs
-import core.scope   as scope
-import core.draw    as draw
+import core.render   as render
+import core.configs  as configs
+import core.scope    as scope
+import core.draw     as draw
+import core.fir_core as fir_core
 
 def when_configs_reloaded() -> None:
     rl.SetWindowSize(configs.ScreenCfg.width(), configs.ScreenCfg.height())
@@ -17,10 +18,11 @@ def main() -> None:
     hot_reloader = HotReloader(
         modules_root = "./core",
         targets = {
-            "render.py"  : render,
-            "scope.py"   : scope,
-            "draw.py"    : draw,
-            "configs.py" : configs,
+            "render.py"   : render,
+            "scope.py"    : scope,
+            "draw.py"     : draw,
+            "configs.py"  : configs,
+            "fir_core.py" : fir_core,
         }
     )    
     

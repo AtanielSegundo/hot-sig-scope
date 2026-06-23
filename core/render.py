@@ -1,8 +1,9 @@
 import numpy as np
 import raylib as rl
 from scipy.signal import bilinear
-import core.draw  as draw
-import core.audio as audio
+import core.draw     as draw
+import core.audio    as audio
+import core.fir_core as fir
 
 import core.scope   as scope
 
@@ -290,30 +291,27 @@ def render_bench_tranfer_function(cfg, state,):
     
     laplace_tfs = {
         "pass"     : ([1], [1]),
+        "chebII_lp": (0.1*np.array([1,1.28,1e6]),[1,480,128000]),
         "chebI_hp" : ([1,0,0], [1.0, 4726, 1.666e7]),
         "chebI_bp" : ([7.3e7,0,0], 
                       np.polymul([1.0, 3341.9, 8.332e6],[1.0, 10134.9, 7.662e7])),
     }
 
-    num, den = laplace_tfs["chebI_bp"]
+    num, den = laplace_tfs["chebII_lp"]
     
     # num = den = None
     show_splane  = False
     show_fft     = False
     f_min        = 1.0
-    f_max        = 4000
+    f_max        = 8000
     sweep_period = 5.0
-    # Convert from s plane to z using bilinear projection => 
-    
-    # 2/T * (1 - z^-1) / (1 + z^-1)
-    z_T          = None
-    
-    # Number of bits to use in quantization
-    quantization_bits = 4
-
-    # Send the displayed test tone (filter output at f_now) to the speaker.
+    quantization_bits = None
     show_as_audio = False
-
+    
+    # Convert from s plane to z using bilinear projection => 
+    # 2/T * (1 - z^-1) / (1 + z^-1)
+    z_T          = 1/16000
+    
     if num is None or den is None:
         wc  = 2 * np.pi * 1000.0
         num = [wc * wc]
@@ -388,7 +386,8 @@ def render_bench_tranfer_function(cfg, state,):
     sigma = -DECAY / T                   # fixed real part (same at every frequency)
     s_now = complex(sigma, omega)
     pt_now = s_to_pt(s_now)              # s = sigma+jw (S)  or  z = e^{s T} (Z)
-    sig   = np.exp(sigma * t) * np.sin(omega * t)  * np.hamming(M)
+    
+    # sig   = np.exp(sigma * t) * np.sin(omega * t)  * np.hamming(M)
 
     # H evaluated at the FULL complex point (general Laplace / z-plane point)
     H_s     = np.polyval(num, pt_now) / np.polyval(den, pt_now)
@@ -482,5 +481,169 @@ def render_bench_tranfer_function(cfg, state,):
         draw.draw_curve(state, "bench_signal", px, py, (255, 210, 80, 255), rect=r,
                         stair=(z_T is not None or quantization_bits is not None))
 
+def render_fir_bench(cfg, state):
+    '''
+    Bench a windowed-sinc FIR filter designed with core.fir_core.
+
+    The filter is specified by a window, a pass band [low_cut, high_cut] and a
+    transition bandwidth `bw` (which sets the tap count N via the window's rule).
+    Three panels, mirroring render_bench_tranfer_function:
+
+        1. Amplitude |H(f)|  [dB]            (or the impulse response h[n] when
+        2. Phase     /_H(f)  [graus]          show_taps is on -- panels 1+2 merge)
+        3. A pure tone at the swept frequency, ACTUALLY filtered through the FIR
+           (spectrum * H, exactly like fir_freq_response.apply_filter) -- shown
+           in time, or as its FFT.
+    '''
+    scr = cfg.ScreenCfg
+    rl.ClearBackground((10, 10, 14))
+
+    # BLOCKS SIZES TO CONSIDER THE FFT TAIL
+    # B    = nfft - (N - 1)            # usable block = 892 samples per FFT
+
+    # ---- FIR specification -------------------------------------------------
+    fs        = 16000.0         # filter sample rate
+    low_cut   = 400.0             # pass band lower edge (0 -> low-pass)
+    high_cut  = 1500.0          # pass band upper edge (>= fs/2 -> high-pass)
+    bw        = 100.0           # transition bandwidth -> tap count N
+    window    = fir.Hamming     # Hamming / Hanning / Blackman / Rectangular
+    N_FFT     = 2048
+
+    show_taps    = False         # merge panels 0+1 and draw h[n] instead of mag/phase
+    show_fft     = True        # panel 3: FFT instead of the time-domain output
+    f_min        = 20.0
+    f_max        = fs / 2.0     # sweep up to Nyquist
+    sweep_period = 5.0
+    quantization_bits = 12
+    show_as_audio     = False
+
+    # ---- design (cached): taps + exact complex response over the sweep -----
+    key    = (window.__name__, fs, low_cut, high_cut, bw, f_min, f_max)
+    design = state.get("fir_design")
+    if design is None or design[0] != key:
+        h, N, M = fir.fir_taps(window, fs, bw, low_cut, high_cut,N_FFT)
+        freqs = np.logspace(np.log10(f_min), np.log10(f_max), 1024)
+        # exact FIR response  H(f) = sum_n h[n] e^{-j 2*pi*f*n/fs}
+        E      = np.exp(-2j * np.pi * np.outer(freqs, np.arange(h.size)) / fs)
+        Hc     = E @ h
+        mag_db = 20 * np.log10(np.abs(Hc) + 1e-12)
+        phase  = np.degrees(np.unwrap(np.angle(Hc)))
+        design = (key, h, N, M, freqs, mag_db, phase)
+        state["fir_design"] = design
+        print(f"[FIR {window.__name__}  N={N} taps  atraso de grupo={M} amostras "
+              f"({M / fs * 1e3:.2f} ms)  passa {low_cut:g}..{high_cut:g} Hz @ {fs:g} Hz]")
+    _, h, N, M, freqs, mag_db, phase = design
+
+    # ---- swept "current" frequency ----------------------------------------
+    dt    = rl.GetFrameTime()
+    u     = (state.get("fir_u", 0.0) + dt / sweep_period) % 1.0
+    state["fir_u"] = u
+    f_now = f_min * (f_max / f_min) ** u
+
+    H_now     = np.sum(h * np.exp(-2j * np.pi * f_now * np.arange(h.size) / fs))  # exact
+    mag_now   = 20 * np.log10(np.abs(H_now) + 1e-12)
+    phase_now = np.interp(f_now, freqs, phase)
+
+    # audio: play f_now scaled by |H(f_now)| -> loud in band, quiet out of band
+    if show_as_audio:
+        snd = state.get("audio")
+        if snd is None:
+            snd = audio.ToneStreamer(sample_rate=44100, frames=2048)
+            state["audio"] = snd
+        snd.feed(f_now, amp=min(float(np.abs(H_now)), 1.0), bits=quantization_bits)
+    else:
+        snd = state.get("audio")
+        if snd is not None:
+            snd.stop()
+
+    # ---- actually FILTER a test tone through the FIR (uses fir_core) -------
+    # mirror fir_freq_response.apply_filter: spectrum * |H| then inverse FFT.
+    Msig      = 2048
+    t         = np.arange(Msig) / fs
+    x         = np.cos(2 * np.pi * f_now * t)                 # pure tone at f_now
+    X         = np.fft.rfft(x)
+    sig_freqs = np.fft.rfftfreq(Msig, d=1.0 / fs)
+    Hmag      = fir.filter_freq_response(window, fs, bw, low_cut, high_cut, sig_freqs)
+    y         = np.fft.irfft(X * Hmag, n=Msig)               # zero-phase filtered output
+
+    # ---- layout: three stacked panels -------------------------------------
+    margin, gap = 70, 45
+    pw = scr.width() - 2 * margin
+    ph = (scr.height() - 2 * margin - 2 * gap) // 3
+    panels = [(margin, margin + i * (ph + gap), pw, ph) for i in range(3)]
+    fr = (f_min, f_max)
+
+    # ---- panels 0/1: amplitude + phase  OR  the impulse response ----------
+    if show_taps:
+        r0, r1 = panels[0], panels[1]
+        merged = (r0[0], r0[1], r0[2], (r1[1] + r1[3]) - r0[1])   # span both panels
+        draw.draw_panel(merged, f"Resposta ao impulso  h[n]   {N} taps   "
+                                f"{window.__name__}   atraso de grupo {M} amostras")
+        hr = max(float(np.abs(h).max()), 1e-6) * 1.2
+        xr = (0.0, N - 1);  yr = (-hr, hr)
+        draw.draw_h_grid(merged, yr, draw._nice_step(2 * hr))
+        draw.vmarker(merged, xr, M, (255, 90, 90, 120), xlog=False)   # center tap
+        px, py = draw.rect_map(np.arange(N), h, xr, yr, merged, xlog=False)
+        draw.draw_curve(state, "fir_taps", px, py, draw.SQ_PURPLE, rect=merged, stair=True)
+    else:
+        # amplitude
+        r  = panels[0]
+        draw.draw_panel(r, f"Amplitude  |H(f)|  [dB]      {mag_now:+7.1f} dB   ({N} taps)")
+        yr = (max(float(mag_db.min()), -120.0) - 5, float(mag_db.max()) + 5)
+        draw.draw_log_grid(r, fr)
+        draw.draw_h_grid(r, yr, 20.0)
+        for fc in (low_cut, high_cut):
+            if f_min < fc < f_max:
+                draw.vmarker(r, fr, fc, (90, 160, 255, 120), xlog=True)   # cutoffs
+        draw.vmarker(r, fr, f_now, draw.MARK_RED, xlog=True)
+        px, py = draw.rect_map(freqs, mag_db, fr, yr, r, xlog=True)
+        draw.draw_curve(state, "fir_mag", px, py, draw.SQ_PURPLE, rect=r)
+
+        # phase (unwrapped -> a near-straight ramp == the linear-phase signature)
+        r  = panels[1]
+        draw.draw_panel(r, f"Fase  /_H(f)  [graus]      {phase_now:+8.1f} deg")
+        yr = (float(phase.min()) - 10, float(phase.max()) + 10)
+        draw.draw_log_grid(r, fr)
+        draw.draw_h_grid(r, yr, draw._nice_step(yr[1] - yr[0]))
+        draw.vmarker(r, fr, f_now, draw.MARK_RED, xlog=True)
+        px, py = draw.rect_map(freqs, phase, fr, yr, r, xlog=True)
+        draw.draw_curve(state, "fir_phase", px, py, (120, 220, 160, 255), rect=r)
+
+    # ---- panel 2: the filtered signal in time  --  OR its FFT -------------
+    r        = panels[2]
+    sig_plot = y
+    if show_fft:
+        q_title = ""
+        if quantization_bits is not None:
+            sig_plot, lsb = quantize(y, -1.1, 1.1, quantization_bits)
+            q_title = f"  [{int(quantization_bits)} bits  LSB={lsb:.4g} V]"
+        win    = sig_plot * np.hanning(Msig)
+        spec   = np.abs(np.fft.rfft(win)) / (Msig / 2)
+        spec_f = np.fft.rfftfreq(Msig, 1 / fs)
+        draw.draw_panel(r, f"FFT do sinal filtrado   (f = {f_now:8.1f} Hz)" + q_title)
+        xr = (0.0, f_max);  yr = (0.0, 1.1)
+        draw.draw_h_grid(r, yr, yr[1] / 4)
+        for fc in (low_cut, high_cut):
+            draw.vmarker(r, xr, fc, (90, 160, 255, 120), xlog=False)
+        draw.vmarker(r, xr, f_now, (255, 90, 90, 120), xlog=False)
+        px, py = draw.rect_map(spec_f, spec, xr, yr, r, xlog=False)
+        draw.draw_curve(state, "fir_fft", px, py, (255, 210, 80, 255), rect=r)
+    else:
+        xr = (0.0, Msig / fs);  yr = (-1.1, 1.1)
+        if quantization_bits is not None:
+            sig_plot, lsb = quantize(y, yr[0], yr[1], quantization_bits)
+            draw.draw_panel(r, f"Sinal filtrado quantizado   {int(quantization_bits)} bits   "
+                               f"LSB={lsb:.4g} V   f={f_now:7.1f} Hz")
+            draw.draw_h_grid(r, yr, lsb)
+        else:
+            draw.draw_panel(r, f"Sinal filtrado pela FIR   y[n]   f={f_now:7.1f} Hz   "
+                               f"ganho |H|={float(np.abs(H_now)):.3f}")
+            draw.draw_h_grid(r, yr, 0.5)
+        px, py = draw.rect_map(t, sig_plot, xr, yr, r, xlog=False)
+        draw.draw_curve(state, "fir_signal", px, py, (255, 210, 80, 255), rect=r,
+                        stair=(quantization_bits is not None))
+
+
 # Active renderer (assigned after all renderers are defined).
-render_target = render_bench_tranfer_function
+render_target = render_fir_bench
+# render_target = render_bench_tranfer_function
