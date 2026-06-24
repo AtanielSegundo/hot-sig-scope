@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import raylib as rl
 from scipy.signal import bilinear
@@ -297,7 +298,7 @@ def render_bench_tranfer_function(cfg, state,):
                       np.polymul([1.0, 3341.9, 8.332e6],[1.0, 10134.9, 7.662e7])),
     }
 
-    num, den = laplace_tfs["chebII_lp"]
+    num, den = laplace_tfs["chebI_hp"]
     
     # num = den = None
     show_splane  = False
@@ -305,7 +306,7 @@ def render_bench_tranfer_function(cfg, state,):
     f_min        = 1.0
     f_max        = 8000
     sweep_period = 5.0
-    quantization_bits = None
+    quantization_bits = 8
     show_as_audio = False
     
     # Convert from s plane to z using bilinear projection => 
@@ -503,19 +504,19 @@ def render_fir_bench(cfg, state):
 
     # ---- FIR specification -------------------------------------------------
     fs        = 16000.0         # filter sample rate
-    low_cut   = 400.0             # pass band lower edge (0 -> low-pass)
-    high_cut  = 1500.0          # pass band upper edge (>= fs/2 -> high-pass)
+    low_cut   = 0.0             # pass band lower edge (0 -> low-pass)
+    high_cut  = 800.0           # pass band upper edge (>= fs/2 -> high-pass)
     bw        = 100.0           # transition bandwidth -> tap count N
-    window    = fir.Hamming     # Hamming / Hanning / Blackman / Rectangular
+    window    = fir.Blackman    # Hamming / Hanning / Blackman / Rectangular
     N_FFT     = 2048
 
-    show_taps    = False         # merge panels 0+1 and draw h[n] instead of mag/phase
-    show_fft     = True        # panel 3: FFT instead of the time-domain output
+    show_taps    = False        # merge panels 0+1 and draw h[n] instead of mag/phase
+    show_fft     = False        # panel 3: FFT instead of the time-domain output
     f_min        = 20.0
     f_max        = fs / 2.0     # sweep up to Nyquist
-    sweep_period = 5.0
-    quantization_bits = 12
-    show_as_audio     = False
+    sweep_period = 10
+    quantization_bits = 8
+    show_as_audio     = True
 
     # ---- design (cached): taps + exact complex response over the sweep -----
     key    = (window.__name__, fs, low_cut, high_cut, bw, f_min, f_max)
@@ -533,6 +534,15 @@ def render_fir_bench(cfg, state):
         print(f"[FIR {window.__name__}  N={N} taps  atraso de grupo={M} amostras "
               f"({M / fs * 1e3:.2f} ms)  passa {low_cut:g}..{high_cut:g} Hz @ {fs:g} Hz]")
     _, h, N, M, freqs, mag_db, phase = design
+
+    # press E -> export the CURRENT design to filtro_fir_esp32/fir_taps.h, which
+    # filtro_fir_esp32.ino #includes at compile time (overlap-save FIR on ESP32).
+    if rl.IsKeyPressed(rl.KEY_E):
+        proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        dest = os.path.join(proj, "filtro_fir_esp32", "fir_taps.h")
+        fir.write_taps_header(dest, h, N, M, N_FFT, fs,
+                              window=window, low_cut=low_cut, high_cut=high_cut, bw=bw)
+        print(f"[exportado] {dest}  (N={N} taps, N_FFT={N_FFT}, B={N_FFT-(N-1)})")
 
     # ---- swept "current" frequency ----------------------------------------
     dt    = rl.GetFrameTime()
@@ -560,7 +570,7 @@ def render_fir_bench(cfg, state):
     # mirror fir_freq_response.apply_filter: spectrum * |H| then inverse FFT.
     Msig      = 2048
     t         = np.arange(Msig) / fs
-    x         = np.cos(2 * np.pi * f_now * t)                 # pure tone at f_now
+    x         = np.cos(2 * np.pi * f_now * t) * np.hamming(Msig) # pure tone at f_now
     X         = np.fft.rfft(x)
     sig_freqs = np.fft.rfftfreq(Msig, d=1.0 / fs)
     Hmag      = fir.filter_freq_response(window, fs, bw, low_cut, high_cut, sig_freqs)
@@ -579,11 +589,12 @@ def render_fir_bench(cfg, state):
         merged = (r0[0], r0[1], r0[2], (r1[1] + r1[3]) - r0[1])   # span both panels
         draw.draw_panel(merged, f"Resposta ao impulso  h[n]   {N} taps   "
                                 f"{window.__name__}   atraso de grupo {M} amostras")
-        hr = max(float(np.abs(h).max()), 1e-6) * 1.2
+        taps = h[:N]                                   # only the real taps (drop padding)
+        hr = max(float(np.abs(taps).max()), 1e-6) * 1.2
         xr = (0.0, N - 1);  yr = (-hr, hr)
         draw.draw_h_grid(merged, yr, draw._nice_step(2 * hr))
         draw.vmarker(merged, xr, M, (255, 90, 90, 120), xlog=False)   # center tap
-        px, py = draw.rect_map(np.arange(N), h, xr, yr, merged, xlog=False)
+        px, py = draw.rect_map(np.arange(N), taps, xr, yr, merged, xlog=False)
         draw.draw_curve(state, "fir_taps", px, py, draw.SQ_PURPLE, rect=merged, stair=True)
     else:
         # amplitude
@@ -645,5 +656,5 @@ def render_fir_bench(cfg, state):
 
 
 # Active renderer (assigned after all renderers are defined).
-render_target = render_fir_bench
+render_target = render_bench_tranfer_function
 # render_target = render_bench_tranfer_function
