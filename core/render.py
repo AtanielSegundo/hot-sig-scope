@@ -15,7 +15,7 @@ def render_frames_art(cfg, state):
 
     render_scope_axis(scr)
 
-    A, B              = 3,7           # Lissajous frequency ratio (sets the knobs)
+    A, B              = 1,3           # Lissajous frequency ratio (sets the knobs)
     PHI_SPEED         = np.pi/2       # phase drift, rad/s (figure deforms)
     BEAM_SPEED        = 200.0         # parameter units traced per second
     SAMPLES_PER_FRAME = 4096          # beam resolution within one frame
@@ -298,11 +298,11 @@ def render_bench_tranfer_function(cfg, state,):
                       np.polymul([1.0, 3341.9, 8.332e6],[1.0, 10134.9, 7.662e7])),
     }
 
-    num, den = laplace_tfs["chebI_hp"]
+    num, den = laplace_tfs["chebII_lp"]
     
     # num = den = None
-    show_splane  = False
-    show_fft     = False
+    show_splane  = True
+    show_fft     = True
     f_min        = 1.0
     f_max        = 8000
     sweep_period = 5.0
@@ -311,7 +311,7 @@ def render_bench_tranfer_function(cfg, state,):
     
     # Convert from s plane to z using bilinear projection => 
     # 2/T * (1 - z^-1) / (1 + z^-1)
-    z_T          = 1/16000
+    z_T          = None
     
     if num is None or den is None:
         wc  = 2 * np.pi * 1000.0
@@ -395,7 +395,7 @@ def render_bench_tranfer_function(cfg, state,):
     mag_s   = 20 * np.log10(np.abs(H_s) + 1e-12)
     phase_s = np.degrees(np.angle(H_s))
 
-    out = np.abs(H_now) * np.exp(sigma * t) * np.sin(omega * t + np.angle(H_now)) * np.hamming(M)
+    out = np.abs(H_now) * np.exp(sigma * t) * np.sin(omega * t + np.angle(H_now))
 
     # layout: three stacked panels
     margin, gap = 70, 45
@@ -506,17 +506,18 @@ def render_fir_bench(cfg, state):
     fs        = 16000.0         # filter sample rate
     low_cut   = 0.0             # pass band lower edge (0 -> low-pass)
     high_cut  = 800.0           # pass band upper edge (>= fs/2 -> high-pass)
-    bw        = 100.0           # transition bandwidth -> tap count N
+    bw        = 400.0          # transition bandwidth -> tap count N
     window    = fir.Blackman    # Hamming / Hanning / Blackman / Rectangular
-    N_FFT     = 2048
+    N_FFT     = 256
 
     show_taps    = False        # merge panels 0+1 and draw h[n] instead of mag/phase
     show_fft     = False        # panel 3: FFT instead of the time-domain output
+    linear_freq  = True         # amplitude/phase vs LINEAR freq (phase -> straight line)
     f_min        = 20.0
     f_max        = fs / 2.0     # sweep up to Nyquist
     sweep_period = 10
     quantization_bits = 8
-    show_as_audio     = True
+    show_as_audio     = False
 
     # ---- design (cached): taps + exact complex response over the sweep -----
     key    = (window.__name__, fs, low_cut, high_cut, bw, f_min, f_max)
@@ -581,7 +582,9 @@ def render_fir_bench(cfg, state):
     pw = scr.width() - 2 * margin
     ph = (scr.height() - 2 * margin - 2 * gap) // 3
     panels = [(margin, margin + i * (ph + gap), pw, ph) for i in range(3)]
-    fr = (f_min, f_max)
+    # frequency axis for the bode panels: linear (0..f_max) or log (f_min..f_max)
+    fr    = (0.0, f_max) if linear_freq else (f_min, f_max)
+    xlogf = not linear_freq
 
     # ---- panels 0/1: amplitude + phase  OR  the impulse response ----------
     if show_taps:
@@ -601,23 +604,23 @@ def render_fir_bench(cfg, state):
         r  = panels[0]
         draw.draw_panel(r, f"Amplitude  |H(f)|  [dB]      {mag_now:+7.1f} dB   ({N} taps)")
         yr = (max(float(mag_db.min()), -120.0) - 5, float(mag_db.max()) + 5)
-        draw.draw_log_grid(r, fr)
+        (draw.draw_lin_grid if linear_freq else draw.draw_log_grid)(r, fr)
         draw.draw_h_grid(r, yr, 20.0)
         for fc in (low_cut, high_cut):
-            if f_min < fc < f_max:
-                draw.vmarker(r, fr, fc, (90, 160, 255, 120), xlog=True)   # cutoffs
-        draw.vmarker(r, fr, f_now, draw.MARK_RED, xlog=True)
-        px, py = draw.rect_map(freqs, mag_db, fr, yr, r, xlog=True)
+            if fr[0] <= fc <= fr[1]:
+                draw.vmarker(r, fr, fc, (90, 160, 255, 120), xlog=xlogf)   # cutoffs
+        draw.vmarker(r, fr, f_now, draw.MARK_RED, xlog=xlogf)
+        px, py = draw.rect_map(freqs, mag_db, fr, yr, r, xlog=xlogf)
         draw.draw_curve(state, "fir_mag", px, py, draw.SQ_PURPLE, rect=r)
 
         # phase (unwrapped -> a near-straight ramp == the linear-phase signature)
         r  = panels[1]
         draw.draw_panel(r, f"Fase  /_H(f)  [graus]      {phase_now:+8.1f} deg")
         yr = (float(phase.min()) - 10, float(phase.max()) + 10)
-        draw.draw_log_grid(r, fr)
+        (draw.draw_lin_grid if linear_freq else draw.draw_log_grid)(r, fr)
         draw.draw_h_grid(r, yr, draw._nice_step(yr[1] - yr[0]))
-        draw.vmarker(r, fr, f_now, draw.MARK_RED, xlog=True)
-        px, py = draw.rect_map(freqs, phase, fr, yr, r, xlog=True)
+        draw.vmarker(r, fr, f_now, draw.MARK_RED, xlog=xlogf)
+        px, py = draw.rect_map(freqs, phase, fr, yr, r, xlog=xlogf)
         draw.draw_curve(state, "fir_phase", px, py, (120, 220, 160, 255), rect=r)
 
     # ---- panel 2: the filtered signal in time  --  OR its FFT -------------
@@ -656,5 +659,5 @@ def render_fir_bench(cfg, state):
 
 
 # Active renderer (assigned after all renderers are defined).
-render_target = render_bench_tranfer_function
+render_target = render_frames_art
 # render_target = render_bench_tranfer_function

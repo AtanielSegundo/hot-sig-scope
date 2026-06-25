@@ -32,8 +32,6 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "esp_dsp.h"
-
-// FIR_FS_HZ, FIR_N_TAP, FIR_M, FIR_N_FFT, FIR_B_BLK, h_taps[]
 #include "fir_taps.h"   
 
 #define SAMPLE_RATE   16000             // Hz - deve casar com FIR_FS_HZ
@@ -56,7 +54,9 @@ static volatile uint16_t adcRing[ADC_RING_LEN];
 static volatile uint32_t adcHead = 0;   // somente a AcquireTask escreve
 static volatile uint32_t adcTail = 0;   // somente a ProcessTask escreve
 
-typedef struct { uint8_t s[BLOCK_SIZE]; } Block;
+typedef struct { 
+  uint8_t s[BLOCK_SIZE]; 
+} Block;
 
 static QueueHandle_t     dacQueue   = NULL;  // blocos prontos p/ o DAC
 static SemaphoreHandle_t adcSem     = NULL;  // "tick" de aquisicao (binario)
@@ -112,12 +112,16 @@ void ProcessTask(void *arg) {
     xSemaphoreTake(blockReady, portMAX_DELAY);  // espera 1 bloco de B amostras
 
     // monta o buffer: [ hist(N-1) | B amostras novas ] = N_FFT  (imag = 0)
-    for (int i = 0; i < FIR_N_TAP - 1; i++) { fftbuf[2 * i] = hist[i]; fftbuf[2 * i + 1] = 0.0f; }
+    for (int i = 0; i < FIR_N_TAP - 1; i++) { 
+      fftbuf[2 * i] = hist[i]; 
+      fftbuf[2 * i + 1] = 0.0f; 
+    }
+    
     for (int i = 0; i < FIR_B_BLK; i++) {
       uint16_t raw = adcRing[adcTail];
       adcTail = (adcTail + 1) % ADC_RING_LEN;
 
-      float f = raw * (VREF / ADC_FS) - MID;    // conta ADC -> tensao -> remove DC -> f(t)
+      float f = raw * (VREF / ADC_FS) - MID;
       int p = (FIR_N_TAP - 1) + i;
       fftbuf[2 * p] = f; fftbuf[2 * p + 1] = 0.0f;
     }
@@ -190,7 +194,7 @@ void setup() {
   blockReady = xSemaphoreCreateCounting(ADC_RING_LEN / BLOCK_SIZE, 0);
   dacQueue   = xQueueCreate(8, sizeof(Block));
 
-  // Tarefas: I/O no nucleo 0, DSP (FFT) no nucleo 1  (uso dos 2 nucleos)
+  // Tarefas: I/O no nucleo 0, DSP (FFT) no nucleo 1
   xTaskCreatePinnedToCore(AcquireTask, "ADC", 4096, NULL, 5, NULL, 0);
   xTaskCreatePinnedToCore(ProcessTask, "DSP", 8192, NULL, 4, NULL, 1);
   xTaskCreatePinnedToCore(DacTask,     "DAC", 4096, NULL, 5, NULL, 0);

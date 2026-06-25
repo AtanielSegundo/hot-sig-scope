@@ -188,6 +188,20 @@ def draw_log_grid(rect, xr):
                 rl.DrawText(f"{f:g}".encode(), x + 3, ry + rh - 16, 14, TXT_DIM)
 
 
+def draw_lin_grid(rect, xr, step=None):
+    '''Vertical grid + labels at evenly spaced (linear) x intervals.'''
+    rx, ry, rw, rh = rect
+    xmin, xmax = xr
+    if step is None:
+        step = _nice_step(xmax - xmin)
+    v = np.ceil(xmin / step) * step
+    while v <= xmax + 1e-9:
+        x = int(rx + (v - xmin) / (xmax - xmin) * rw)
+        rl.DrawLine(x, ry, x, ry + rh, GRID_MAJOR)
+        rl.DrawText(f"{v:g}".encode(), x + 3, ry + rh - 16, 14, TXT_DIM)
+        v += step
+
+
 def draw_h_grid(rect, yr, step):
     '''Horizontal grid + value labels every `step` units of y.'''
     rx, ry, rw, rh = rect
